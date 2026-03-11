@@ -1,4 +1,4 @@
-load("//:objc.bzl", "objc_binary", "objc_library")
+load("//:objc.bzl", "objc_binary", "objc_library", "objc_test")
 
 objc_library(
     name = "math_utils",
@@ -9,5 +9,11 @@ objc_library(
 objc_binary(
     name = "hello",
     srcs = ["main.m"],
+    deps = [":math_utils"]
+)
+
+objc_test(
+    name = "math_test",
+    srcs = ["test_math.m"],
     deps = [":math_utils"]
 )

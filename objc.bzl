@@ -2,6 +2,7 @@
 
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 def _objc_rename_impl(ctx):
     outputs = []
@@ -101,6 +102,19 @@ def objc_binary(name, srcs = [], deps = [], **kwargs):
     cc_binary(
         name = name,
         srcs = [":" + name + "_rename_bin"],
+        deps = deps,
+        copts = kwargs.pop("copts", []) + ["-x", lang, "-fobjc-arc"],
+        includes = ["."],
+        **kwargs
+    )
+
+def objc_test(name, srcs = [], deps = [], **kwargs):
+    _objc_rename(name = name + "_rename_test", srcs = srcs)
+    has_mm = any([s.endswith(".mm") for s in srcs])
+    lang = "objective-c++" if has_mm else "objective-c"
+    cc_test(
+        name = name,
+        srcs = [":" + name + "_rename_test"],
         deps = deps,
         copts = kwargs.pop("copts", []) + ["-x", lang, "-fobjc-arc"],
         includes = ["."],
