@@ -1,0 +1,2 @@
+# Root BUILD.bazel for rules_objc
+exports_files(["objc.bzl"])

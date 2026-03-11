@@ -1,0 +1,13 @@
+load("//:objc.bzl", "objc_binary", "objc_library")
+
+objc_library(
+    name = "math_utils",
+    srcs = ["add.m", "sub.m"],
+    hdrs = ["math_utils.h"]
+)
+
+objc_binary(
+    name = "hello",
+    srcs = ["main.m"],
+    deps = [":math_utils"]
+)
