@@ -6,93 +6,86 @@ load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 def _objc_rename_impl(ctx):
     outputs = []
-    # 获取当前 package 的路径，例如 "tests"
-    pkg_path = ctx.label.package
+    # Get the current package path (e.g., "tests" or "src/video")
+    package_path = ctx.label.package
     
-    for f in ctx.files.srcs + ctx.files.hdrs:
-        # --- 计算相对路径 ---
-        # 我们需要从 f.short_path 中剥离掉 repo 名和 package 名
-        # 例如将 "rules_objc~/tests/sub/main.m" 变为 "sub/main.m"
-        
-        short_path = f.short_path
-        
-        # 处理 Bzlmod 下外部库路径包含 repo 前缀的情况
-        if pkg_path:
-            # 找到 package 路径在 short_path 中的位置，并截掉它及其之前的部分
-            search_str = pkg_path + "/"
-            index = short_path.find(search_str)
-            if index != -1:
-                # 只保留 package 之后的部分（支持子目录结构）
-                rel_path = short_path[index + len(search_str):]
+    for f in ctx.files.srcs:
+        if f.extension in ["m", "mm"]:
+            # 1. Calculate the path relative to the current package.
+            # In Bzlmod, f.short_path might look like 'rules_objc~/tests/main.m'.
+            # We need to strip the repository prefix and the package path to use it in declare_file.
+            short_path = f.short_path
+            
+            # Find the position of the package path to extract the sub-path
+            # For example: 'external/rules_objc~/tests/subdir/main.m' -> 'subdir/main.m'
+            if package_path == "":
+                # Root package case
+                rel_path = short_path.split("/")[-1] if "/" in short_path and "~" in short_path else short_path
             else:
-                # 如果找不到（文件就在 package 根目录），直接取文件名
-                rel_path = f.basename
-        else:
-            # 如果是根目录 package
-            rel_path = short_path
+                search_str = package_path + "/"
+                index = short_path.find(search_str)
+                if index != -1:
+                    rel_path = short_path[index + len(search_str):]
+                else:
+                    # Fallback to basename if package path isn't found in short_path
+                    rel_path = f.basename
 
-        # --- 根据后缀名生成影子文件 ---
-        if f.extension == "m":
-            out = ctx.actions.declare_file(rel_path + ".c")
-        elif f.extension == "mm":
-            out = ctx.actions.declare_file(rel_path + ".cc")
-        else:
-            out = ctx.actions.declare_file(rel_path)
+            # 2. Declare the stub file with the correct extension
+            ext = ".c" if f.extension == "m" else ".cc"
+            out = ctx.actions.declare_file(rel_path + ext)
+            
+            # 3. Calculate the include path relative to the repository root.
+            # f.path is the execution path. workspace_root is 'external/repo_name' for external repos.
+            include_path = f.path
+            workspace_root = f.owner.workspace_root
+            if workspace_root and include_path.startswith(workspace_root + "/"):
+                include_path = include_path[len(workspace_root + "/"):]
 
-        ctx.actions.symlink(output = out, target_file = f)
-        outputs.append(out)
-        
+            # 4. Generate the stub content referencing the original file
+            ctx.actions.write(
+                output = out,
+                content = '#include "%s"\n' % include_path,
+            )
+            outputs.append(out)
+            
     return [DefaultInfo(files = depset(outputs))]
 
 _objc_rename = rule(
     implementation = _objc_rename_impl,
     attrs = {
         "srcs": attr.label_list(allow_files = True),
-        "hdrs": attr.label_list(allow_files = True),
     },
 )
 
-def objc_library(name, srcs = [], hdrs = [], deps = [], copts = [], **kwargs):
-    # 将 .m 和头文件一起 symlink 到 shadow 目录
+def _objc_common(name, rule_fn, srcs = [], hdrs = [], deps = [], copts = [], **kwargs):
+    # Determine if we are compiling Objective-C or Objective-C++
+    has_mm = False
+    if type(srcs) == "list":
+        has_mm = any([s.endswith(".mm") for s in srcs])
+    lang = "objective-c++" if has_mm else "objective-c"
+
+    # Generate the stub .c/.cc files
     _objc_rename(
-        name = name + "_shadow",
+        name = name + "_stubs",
         srcs = srcs,
-        hdrs = hdrs,
     )
 
-    # 使用 cc_library 进行编译，此时影子目录中的相对路径是正确的
-    cc_library(
+    rule_fn(
         name = name,
-        srcs = [":" + name + "_shadow"],
+        srcs = [":" + name + "_stubs"],
+        # Use textual_hdrs to ensure original sources are available in the sandbox
+        # during compilation of the stub files.
+        textual_hdrs = srcs + hdrs,
         deps = deps,
-        copts = copts + ["-x", "objective-c", "-fobjc-arc"],
+        copts = copts + ["-x", lang, "-fobjc-arc"],
         **kwargs
     )
 
-def objc_binary(name, srcs = [], hdrs = [], deps = [], copts = [], **kwargs):
-    _objc_rename(
-        name = name + "_shadow_bin",
-        srcs = srcs,
-        hdrs = hdrs,
-    )
-    cc_binary(
-        name = name,
-        srcs = [":" + name + "_shadow_bin"],
-        deps = deps,
-        copts = copts + ["-x", "objective-c", "-fobjc-arc"],
-        **kwargs
-    )
+def objc_library(name, **kwargs):
+    _objc_common(name, cc_library, **kwargs)
 
-def objc_test(name, srcs = [], hdrs = [], deps = [], copts = [], **kwargs):
-    _objc_rename(
-        name = name + "_shadow_test",
-        srcs = srcs,
-        hdrs = hdrs,
-    )
-    cc_test(
-        name = name,
-        srcs = [":" + name + "_shadow_test"],
-        deps = deps,
-        copts = copts + ["-x", "objective-c", "-fobjc-arc"],
-        **kwargs
-    )
+def objc_binary(name, **kwargs):
+    _objc_common(name, cc_binary, **kwargs)
+
+def objc_test(name, **kwargs):
+    _objc_common(name, cc_test, **kwargs)
