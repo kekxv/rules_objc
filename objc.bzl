@@ -6,19 +6,42 @@ load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 def _objc_rename_impl(ctx):
     outputs = []
-    # 建立影子目录结构
+    # 获取当前 package 的路径，例如 "tests"
+    pkg_path = ctx.label.package
+    
     for f in ctx.files.srcs + ctx.files.hdrs:
-        # 使用 short_path 保留目录结构，例如 src/video/cocoa/xxx.m
-        out_path = f.short_path
-        if f.extension == "m":
-            out = ctx.actions.declare_file(out_path + ".c")
-        elif f.extension == "mm":
-            out = ctx.actions.declare_file(out_path + ".cc")
+        # --- 计算相对路径 ---
+        # 我们需要从 f.short_path 中剥离掉 repo 名和 package 名
+        # 例如将 "rules_objc~/tests/sub/main.m" 变为 "sub/main.m"
+        
+        short_path = f.short_path
+        
+        # 处理 Bzlmod 下外部库路径包含 repo 前缀的情况
+        if pkg_path:
+            # 找到 package 路径在 short_path 中的位置，并截掉它及其之前的部分
+            search_str = pkg_path + "/"
+            index = short_path.find(search_str)
+            if index != -1:
+                # 只保留 package 之后的部分（支持子目录结构）
+                rel_path = short_path[index + len(search_str):]
+            else:
+                # 如果找不到（文件就在 package 根目录），直接取文件名
+                rel_path = f.basename
         else:
-            out = ctx.actions.declare_file(out_path)
+            # 如果是根目录 package
+            rel_path = short_path
+
+        # --- 根据后缀名生成影子文件 ---
+        if f.extension == "m":
+            out = ctx.actions.declare_file(rel_path + ".c")
+        elif f.extension == "mm":
+            out = ctx.actions.declare_file(rel_path + ".cc")
+        else:
+            out = ctx.actions.declare_file(rel_path)
 
         ctx.actions.symlink(output = out, target_file = f)
         outputs.append(out)
+        
     return [DefaultInfo(files = depset(outputs))]
 
 _objc_rename = rule(
