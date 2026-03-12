@@ -6,20 +6,13 @@ load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 def _objc_rename_impl(ctx):
     outputs = []
-    # Get the current package path (e.g., "tests" or "src/video")
     package_path = ctx.label.package
     
     for f in ctx.files.srcs:
         if f.extension in ["m", "mm"]:
-            # 1. Calculate the path relative to the current package.
-            # In Bzlmod, f.short_path might look like 'rules_objc~/tests/main.m'.
-            # We need to strip the repository prefix and the package path to use it in declare_file.
+            # Calculate relative path to the package to support Bzlmod and subdirectories
             short_path = f.short_path
-            
-            # Find the position of the package path to extract the sub-path
-            # For example: 'external/rules_objc~/tests/subdir/main.m' -> 'subdir/main.m'
             if package_path == "":
-                # Root package case
                 rel_path = short_path.split("/")[-1] if "/" in short_path and "~" in short_path else short_path
             else:
                 search_str = package_path + "/"
@@ -27,21 +20,18 @@ def _objc_rename_impl(ctx):
                 if index != -1:
                     rel_path = short_path[index + len(search_str):]
                 else:
-                    # Fallback to basename if package path isn't found in short_path
                     rel_path = f.basename
 
-            # 2. Declare the stub file with the correct extension
             ext = ".c" if f.extension == "m" else ".cc"
             out = ctx.actions.declare_file(rel_path + ext)
             
-            # 3. Calculate the include path relative to the repository root.
-            # f.path is the execution path. workspace_root is 'external/repo_name' for external repos.
+            # Calculate include path relative to repo root
             include_path = f.path
             workspace_root = f.owner.workspace_root
             if workspace_root and include_path.startswith(workspace_root + "/"):
                 include_path = include_path[len(workspace_root + "/"):]
 
-            # 4. Generate the stub content referencing the original file
+            # Create a stub that includes the original source
             ctx.actions.write(
                 output = out,
                 content = '#include "%s"\n' % include_path,
@@ -58,28 +48,56 @@ _objc_rename = rule(
 )
 
 def _objc_common(name, rule_fn, srcs = [], hdrs = [], deps = [], copts = [], **kwargs):
-    # Determine if we are compiling Objective-C or Objective-C++
+    # Detect language type
     has_mm = False
     if type(srcs) == "list":
         has_mm = any([s.endswith(".mm") for s in srcs])
     lang = "objective-c++" if has_mm else "objective-c"
 
-    # Generate the stub .c/.cc files
+    # Generate stubs
+    stub_name = name + "_stubs"
     _objc_rename(
-        name = name + "_stubs",
+        name = stub_name,
         srcs = srcs,
     )
 
-    rule_fn(
-        name = name,
-        srcs = [":" + name + "_stubs"],
-        # Use textual_hdrs to ensure original sources are available in the sandbox
-        # during compilation of the stub files.
+    # Since cc_binary and cc_test do not support 'textual_hdrs', 
+    # we always wrap the compilation in a cc_library.
+    impl_library_name = name + "_objc_impl"
+    
+    # Extract common attributes that apply to both library and binary/test
+    common_attrs = {}
+    if "testonly" in kwargs:
+        common_attrs["testonly"] = kwargs["testonly"]
+    if "tags" in kwargs:
+        common_attrs["tags"] = kwargs["tags"]
+
+    cc_library(
+        name = impl_library_name,
+        srcs = [":" + stub_name],
+        # Original sources must be in textual_hdrs so the stub can include them
         textual_hdrs = srcs + hdrs,
         deps = deps,
         copts = copts + ["-x", lang, "-fobjc-arc"],
-        **kwargs
+        visibility = ["//visibility:private"],
+        **common_attrs
     )
+
+    if rule_fn == cc_library:
+        # If the user requested a library, we can just use an alias or 
+        # rename the implementation library. Here we use an alias-like approach.
+        native.alias(
+            name = name,
+            actual = ":" + impl_library_name,
+            visibility = kwargs.get("visibility"),
+        )
+    else:
+        # For cc_binary and cc_test, depend on the internal library
+        rule_fn(
+            name = name,
+            deps = [":" + impl_library_name],
+            **kwargs
+        )
 
 def objc_library(name, **kwargs):
     _objc_common(name, cc_library, **kwargs)
