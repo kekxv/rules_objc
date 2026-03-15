@@ -68,6 +68,7 @@ jobs:
     needs: [release]
     permissions:
       contents: write
+      pull-requests: write
     uses: ./.github/workflows/bcr-publish.yaml
     with:
       release_version: ${{ needs.release.outputs.release_version }}
