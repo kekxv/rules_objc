@@ -40,5 +40,6 @@ jobs:
       draft: false
     permissions:
       contents: write
+      pull-requests: write
     secrets:
       publish_token: ${{ secrets.BCR_PUBLISH_TOKEN }}
