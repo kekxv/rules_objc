@@ -1,0 +1,8 @@
+# {version}
+
+## Setup
+```python
+bazel_dep(name = "rules_objc", version = "{version}")
+```
+
+Additional documentation can be found at: https://github.com/kekxv/rules_objc
